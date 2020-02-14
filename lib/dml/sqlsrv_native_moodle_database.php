@@ -407,20 +407,26 @@ class sqlsrv_native_moodle_database extends moodle_database {
     private function do_query($sql, $params, $sql_query_type, $free_result = true, $scrollable = false) {
         list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
 
-        /*
-         * Bound variables *are* supported. Until I can get it to work, emulate the bindings
-         * The challenge/problem/bug is that although they work, doing a SELECT SCOPE_IDENTITY()
-         * doesn't return a value (no result set)
-         *
-         * -- somebody from MS
-         */
+        $emulate_params = true;
+        if(isset($this->dboptions['emulateparameters']))
+            $emulate_params = boolval($this->dboptions['emulateparameters']);
 
-        $sql = $this->emulate_bound_params($sql, $params);
+        if($emulate_params) {
+            // Emulating bound parameters will just replace the query ? placeholders with
+            // the parameter value, executing an ad-hoc query on the server
+            $sql = $this->emulate_bound_params($sql, $params);
+            $sanitised_parameters = array();
+        } else {
+            // Params array includes the hex and numstr data types, which we need to convert
+            // to a format that sqlsrv understands
+            $sanitised_parameters = $this->sanitise_bound_params($params);
+        }
+
         $this->query_start($sql, $params, $sql_query_type);
         if (!$scrollable) { // Only supporting next row
-            $result = sqlsrv_query($this->sqlsrv, $sql);
+            $result = sqlsrv_query($this->sqlsrv, $sql, $sanitised_parameters);
         } else { // Supporting absolute/relative rows
-            $result = sqlsrv_query($this->sqlsrv, $sql, array(), array('Scrollable' => SQLSRV_CURSOR_STATIC));
+            $result = sqlsrv_query($this->sqlsrv, $sql, $sanitised_parameters, array('Scrollable' => SQLSRV_CURSOR_STATIC));
         }
 
         if ($result === false) {
@@ -803,6 +809,25 @@ class sqlsrv_native_moodle_database extends moodle_database {
             $return .= array_pop($parts);
         }
         return $return;
+    }
+
+    /**
+     * Sanitises the parameters array so that they can be passed into sqlsrv_query
+     * @param array $params Moodle parameters
+     * @return array Parameters for sqlsrv
+     */
+    protected function sanitise_bound_params(array $params = array()) {
+        return array_map(function($param) {
+
+            if(is_array($param) && isset($param['hex']))
+                return '0x' . $param['hex'];
+
+            if(is_array($param) && isset($param['numstr']))
+                return strval($param['numstr']);
+
+            return $param;
+
+        }, $params);
     }
 
     /**
