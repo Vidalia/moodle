@@ -214,15 +214,15 @@ class sqlsrv_native_moodle_database extends moodle_database {
         }
 
         $this->sqlsrv = sqlsrv_connect($dbhost, array
-         (
-          'UID' => $this->dbuser,
-          'PWD' => $this->dbpass,
-          'Database' => $this->dbname,
-          'CharacterSet' => 'UTF-8',
-          'MultipleActiveResultSets' => true,
-          'ConnectionPooling' => !empty($this->dboptions['dbpersist']),
-          'ReturnDatesAsStrings' => true,
-         ));
+        (
+            'UID' => $this->dbuser,
+            'PWD' => $this->dbpass,
+            'Database' => $this->dbname,
+            'CharacterSet' => 'UTF-8',
+            'MultipleActiveResultSets' => true,
+            'ConnectionPooling' => !empty($this->dboptions['dbpersist']),
+            'ReturnDatesAsStrings' => true,
+        ));
 
         if ($this->sqlsrv === false) {
             $this->sqlsrv = null;
@@ -407,7 +407,8 @@ class sqlsrv_native_moodle_database extends moodle_database {
     private function do_query($sql, $params, $sql_query_type, $free_result = true, $scrollable = false) {
         list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
 
-        $emulate_params = true;
+        $emulate_params = false;
+
         if(isset($this->dboptions['emulateparameters']))
             $emulate_params = boolval($this->dboptions['emulateparameters']);
 
@@ -511,12 +512,12 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
             while ($row = sqlsrv_fetch_array($result, SQLSRV_FETCH_ASSOC)) {
                 if ($lastindex and $lastindex != $row['index_name'])
-                    { // Save lastindex to $indexes and reset info
+                { // Save lastindex to $indexes and reset info
                     $indexes[$lastindex] = array
-                     (
-                      'unique' => $unique,
-                      'columns' => $columns
-                     );
+                    (
+                        'unique' => $unique,
+                        'columns' => $columns
+                    );
 
                     $unique = false;
                     $columns = array ();
@@ -528,10 +529,10 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
             if ($lastindex) { // Add the last one if exists
                 $indexes[$lastindex] = array
-                 (
-                  'unique' => $unique,
-                  'columns' => $columns
-                 );
+                (
+                    'unique' => $unique,
+                    'columns' => $columns
+                );
             }
 
             $this->free_result($result);
@@ -570,10 +571,10 @@ class sqlsrv_native_moodle_database extends moodle_database {
                            columnproperty(object_id(quotename(table_schema) + '.' + quotename(table_name)), column_name, 'IsIdentity') AS auto_increment,
                            column_default AS default_value
                       FROM tempdb.INFORMATION_SCHEMA.COLUMNS ".
-            // check this statement
-            // JOIN tempdb..sysobjects ON name = table_name
-            // WHERE id = object_id('tempdb..{".$table."}')
-                    "WHERE table_name LIKE '{".$table."}__________%'
+                // check this statement
+                // JOIN tempdb..sysobjects ON name = table_name
+                // WHERE id = object_id('tempdb..{".$table."}')
+                "WHERE table_name LIKE '{".$table."}__________%'
                   ORDER BY ordinal_position";
         }
 
@@ -654,7 +655,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
         }                                                    // And continue processing because text columns with numeric info need special handling below
 
         if ($column->meta_type == 'B')
-            { // BLOBs need to be properly "packed", but can be inserted directly if so.
+        { // BLOBs need to be properly "packed", but can be inserted directly if so.
             if (!is_null($value)) {               // If value not null, unpack it to unquoted hexadecimal byte-string format
                 $value = unpack('H*hex', $value); // we leave it as array, so emulate_bound_params() can detect it
             }                                                // easily and "bind" the param ok.
@@ -694,45 +695,45 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $type = null;
 
         switch (strtoupper($sqlsrv_type)) {
-          case 'BIT':
-           $type = 'L';
-           break;
+            case 'BIT':
+                $type = 'L';
+                break;
 
-          case 'INT':
-          case 'SMALLINT':
-          case 'INTEGER':
-          case 'BIGINT':
-           $type = 'I';
-           break;
+            case 'INT':
+            case 'SMALLINT':
+            case 'INTEGER':
+            case 'BIGINT':
+                $type = 'I';
+                break;
 
-          case 'DECIMAL':
-          case 'REAL':
-          case 'FLOAT':
-           $type = 'N';
-           break;
+            case 'DECIMAL':
+            case 'REAL':
+            case 'FLOAT':
+                $type = 'N';
+                break;
 
-          case 'VARCHAR':
-          case 'NVARCHAR':
-           $type = 'C';
-           break;
+            case 'VARCHAR':
+            case 'NVARCHAR':
+                $type = 'C';
+                break;
 
-          case 'TEXT':
-          case 'NTEXT':
-          case 'VARCHAR(MAX)':
-          case 'NVARCHAR(MAX)':
-           $type = 'X';
-           break;
+            case 'TEXT':
+            case 'NTEXT':
+            case 'VARCHAR(MAX)':
+            case 'NVARCHAR(MAX)':
+                $type = 'X';
+                break;
 
-          case 'IMAGE':
-          case 'VARBINARY':
-          case 'VARBINARY(MAX)':
-           $type = 'B';
-           break;
+            case 'IMAGE':
+            case 'VARBINARY':
+            case 'VARBINARY(MAX)':
+                $type = 'B';
+                break;
 
-          case 'DATETIME':
-           $type = 'D';
-           break;
-         }
+            case 'DATETIME':
+                $type = 'D';
+                break;
+        }
 
         if (!$type) {
             throw new dml_exception('invalidsqlsrvnativetype', $sqlsrv_type);
@@ -900,7 +901,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
                         $fetch = PHP_INT_MAX;
                     }
                     $sql = preg_replace('/^([\s(])*SELECT([\s]+(DISTINCT|ALL))?(?!\s*TOP\s*\()/i',
-                                        "\\1SELECT\\2 TOP $fetch", $sql);
+                        "\\1SELECT\\2 TOP $fetch", $sql);
                 }
             } else {
                 $needscrollable = false; // Using supported fetch/offset, no need to scroll anymore.
@@ -931,7 +932,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
     }
 
     /**
-     * Use NOLOCK on any temp tables. Since it's a temp table and uncommitted reads are low risk anyway.
+     * Use NOLOCK on any temp tables. Since it's a temp table and uncommitted reads are low risk anyway.
      *
      * @param string $sql the SQL select query to execute.
      * @return string The SQL, with WITH (NOLOCK) added to all temp tables
@@ -1084,7 +1085,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $qms = array_fill(0, count($params), '?');
         $qms = implode(',', $qms);
         $sql = "INSERT INTO {" . $table . "} ($fields) VALUES($qms)";
-        $query_id = $this->do_query($sql, $params, SQL_QUERY_INSERT);
+
+        // In parameterised queries, SELECT SCOPE_IDENTITY is run in a _different_ scope to the INSERT
+        // query, so we append it to the INSERT here and extract the inserted ID from the next result set
+        if($returnid) {
+            $sql .= "; SELECT SCOPE_IDENTITY() AS scope_identity";
+        }
+
+        $query_id = $this->do_query($sql, $params, SQL_QUERY_INSERT, !$returnid);
 
         if ($customsequence) {
             // Enable IDENTITY column after inserting record with id, only if the
@@ -1096,26 +1104,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
         }
 
         if ($returnid) {
-            $id = $this->sqlsrv_fetch_id();
+            sqlsrv_next_result($query_id);
+            sqlsrv_fetch($query_id);
+            $id = intval(sqlsrv_get_field($query_id, 0));
+            $this->free_result($query_id);
             return $id;
         } else {
             return true;
         }
-    }
-
-    /**
-     * Get the ID of the current action
-     *
-     * @return mixed ID
-     */
-    private function sqlsrv_fetch_id() {
-        $query_id = sqlsrv_query($this->sqlsrv, 'SELECT SCOPE_IDENTITY()');
-        if ($query_id === false) {
-            $dberr = $this->get_last_error();
-            return false;
-        }
-        $row = $this->sqlsrv_fetchrow($query_id);
-        return (int)$row[0];
     }
 
     /**
