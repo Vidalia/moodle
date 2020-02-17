@@ -94,14 +94,9 @@ install:
     - >
         if [ "$DB" = 'sqlsrv' ];
         then
-            docker run --privileged -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Sqlsrv2020" -p 127.0.0.1:1433:1433 --name mssql -d mcr.microsoft.com/mssql/server-2019:latest
+            docker run --privileged -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Sqlsrv2020" -p 127.0.0.1:1433:1433 --name mssql -d mcr.microsoft.com/mssql/server:2019-latest
             # Wait for mssql to start
             docker exec -i mssql bash <<< 'until echo quit | /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -l 1 -U sa -P Sqlsrv2020 > /dev/null 2>&1 ; do sleep 1; done'
-            # Create the database and a user
-            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE moodle;"
-            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN moodle WITH PASSWORD='password', CHECK_POLICY = OFF;"
-            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE USER moodle FOR LOGIN moodle;"
-            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "EXEC sp_addrolemember 'db_owner', 'moodle';"
             sudo pecl install sqlsrv
         fi
     - >
@@ -166,6 +161,11 @@ before_script:
           # SQLSRV specific setup
           sed -i \
             -e "s%= 'pgsql'%= 'sqlsrv'%" \
+            
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE moodle;"
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN moodle WITH PASSWORD='password', CHECK_POLICY = OFF;"
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE USER moodle FOR LOGIN moodle;"
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "EXEC sp_addrolemember 'db_owner', 'moodle';"
         fi
 
         if [ "$DB" = 'mysqli' ];
