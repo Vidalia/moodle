@@ -160,6 +160,7 @@ before_script:
           # SQLSRV specific setup
           sed -i \
             -e "s%= 'pgsql'%= 'sqlsrv'%" \
+            config.php ;
             
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE moodle;"
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN moodle WITH PASSWORD='password', CHECK_POLICY = OFF;"
