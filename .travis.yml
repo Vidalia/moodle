@@ -49,17 +49,17 @@ matrix:
     fast_finish: true
 
     include:
+        # Also test sqlsrv
+        - php: 7.3
+          env: DB=sqlsrv   TASK=PHPUNIT
+        - php: 7.3
+          env: DB=sqlsrv   TASK=UPGRADE
           # Run mysql only on 7.3 - it's just too slow
         - php: 7.3
           env: DB=mysqli   TASK=PHPUNIT
           # Run grunt/npm install on highest version ('node' is an alias for the latest node.js version.)
         - php: 7.2
           env: DB=none     TASK=GRUNT   NVM_VERSION='lts/carbon'
-          # Also test sqlsrv
-        - php: 7.3
-          env: DB=sqlsrv   TASK=PHPUNIT
-        - php: 7.3
-          env: DB=sqlsrv   TASK=UPGRADE
 
 cache:
     directories:
@@ -97,7 +97,6 @@ install:
             docker run --privileged -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Sqlsrv2020" -p 127.0.0.1:1433:1433 --name mssql -d mcr.microsoft.com/mssql/server:2019-latest
             # Wait for mssql to start
             docker exec -i mssql bash <<< 'until echo quit | /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -l 1 -U sa -P Sqlsrv2020 > /dev/null 2>&1 ; do sleep 1; done'
-            sudo pecl install sqlsrv
         fi
     - >
         if [ "$TASK" = 'PHPUNIT' ];
