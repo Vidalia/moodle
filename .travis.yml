@@ -170,8 +170,8 @@ before_script:
             config.php ;
             
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE moodle;"
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN moodle WITH PASSWORD='password', CHECK_POLICY = OFF;"
-          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE USER moodle FOR LOGIN moodle;"
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN username WITH PASSWORD='password', CHECK_POLICY = OFF;"
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE USER username FOR LOGIN moodle;"
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "EXEC sp_addrolemember 'db_owner', 'moodle';"
         fi
 
