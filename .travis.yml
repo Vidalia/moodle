@@ -15,6 +15,7 @@ dist: xenial
 
 services:
     - mysql
+    - docker
 
 php:
     # We only run the highest and lowest supported versions to reduce the load on travis-ci.org.
@@ -54,6 +55,11 @@ matrix:
           # Run grunt/npm install on highest version ('node' is an alias for the latest node.js version.)
         - php: 7.2
           env: DB=none     TASK=GRUNT   NVM_VERSION='lts/carbon'
+          # Also test sqlsrv
+        - php: 7.3
+          env: DB=sqlsrv   TASK=PHPUNIT
+        - php: 7.3
+          env: DB=sqlsrv   TASK=UPGRADE
 
 cache:
     directories:
@@ -84,6 +90,19 @@ install:
             sudo mv /var/lib/postgresql /mnt/ramdisk
             sudo ln -s /mnt/ramdisk/postgresql /var/lib/postgresql
             sudo service postgresql start 9.6
+        fi
+    - >
+        if [ "$DB" = 'sqlsrv' ];
+        then
+            docker run --privileged -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Sqlsrv2020" -p 127.0.0.1:1433:1433 --name mssql -d mcr.microsoft.com/mssql/server-2019:latest
+            # Wait for mssql to start
+            docker exec -i mssql bash <<< 'until echo quit | /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -l 1 -U sa -P Sqlsrv2020 > /dev/null 2>&1 ; do sleep 1; done'
+            # Create the database and a user
+            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE moodle;"
+            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE LOGIN moodle WITH PASSWORD='password', CHECK_POLICY = OFF;"
+            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "CREATE USER moodle FOR LOGIN moodle;"
+            docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d moodle -Q "EXEC sp_addrolemember 'db_owner', 'moodle';"
+            sudo pecl install sqlsrv
         fi
     - >
         if [ "$TASK" = 'PHPUNIT' ];
@@ -140,6 +159,13 @@ before_script:
             config.php ;
 
           psql -c 'CREATE DATABASE travis_ci_test;' -U postgres;
+        fi
+        
+        if [ "$DB" = 'sqlsrv' ];
+        then
+          # SQLSRV specific setup
+          sed -i \
+            -e "s%= 'pgsql'%= 'sqlsrv'%" \
         fi
 
         if [ "$DB" = 'mysqli' ];
