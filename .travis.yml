@@ -37,10 +37,10 @@ env:
     - DB=none     TASK=CITEST
 
     # Run unit tests on Postgres
-    - DB=pgsql    TASK=PHPUNIT
+    - DB=sqlsrv    TASK=PHPUNIT
 
     # Perform an upgrade test too.
-    - DB=pgsql    TASK=UPGRADE
+    - DB=sqlsrv    TASK=UPGRADE
 
 matrix:
     # Enable fast finish.
@@ -49,14 +49,6 @@ matrix:
     fast_finish: true
 
     include:
-        # Also test sqlsrv
-        - php: 7.3
-          env: DB=sqlsrv   TASK=PHPUNIT
-        - php: 7.3
-          env: DB=sqlsrv   TASK=UPGRADE
-          # Run mysql only on 7.3 - it's just too slow
-        - php: 7.3
-          env: DB=mysqli   TASK=PHPUNIT
           # Run grunt/npm install on highest version ('node' is an alias for the latest node.js version.)
         - php: 7.2
           env: DB=none     TASK=GRUNT   NVM_VERSION='lts/carbon'
@@ -167,12 +159,15 @@ before_script:
           # SQLSRV specific setup
           sed -i \
             -e "s%= 'pgsql'%= 'sqlsrv'%" \
+            -e "s%= 'localhost'%= '127.0.0.1'%" \
             config.php ;
             
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE travis_ci_test;"
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d travis_ci_test -Q "CREATE LOGIN username WITH PASSWORD='', CHECK_POLICY = OFF;"
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d travis_ci_test -Q "CREATE USER username FOR LOGIN username;"
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d travis_ci_test -Q "EXEC sp_addrolemember 'db_owner', 'username';"
+          # READ_COMMITTED_SNAPSHOT is off by default, and causes phpunit to fail
+          docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -d travis_ci_test -Q "ALTER DATABASE travis_ci_test SET READ_COMMITTED_SNAPSHOT ON;"
         fi
 
         if [ "$DB" = 'mysqli' ];

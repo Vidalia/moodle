@@ -37,6 +37,9 @@ require_once(__DIR__.'/sqlsrv_native_moodle_temptables.php');
  */
 class sqlsrv_native_moodle_database extends moodle_database {
 
+    // The maximum number of parameters that sql server can support
+    const MAX_PARAMETER_COUNT = 2100;
+
     protected $sqlsrv = null;
     protected $last_error_reporting; // To handle SQL*Server-Native driver default verbosity
     protected $temptables; // Control existing temptables (sqlsrv_moodle_temptables object)
@@ -412,22 +415,20 @@ class sqlsrv_native_moodle_database extends moodle_database {
         if(isset($this->dboptions['emulateparameters']))
             $emulate_params = boolval($this->dboptions['emulateparameters']);
 
-        if($emulate_params) {
+        // PHPUnit tests expect that we can support 10,000 parameters, so if we go over
+        // the max parameter count for sql server fall back to emulated parameter mode
+        if($emulate_params || sizeof($params) > self::MAX_PARAMETER_COUNT) {
             // Emulating bound parameters will just replace the query ? placeholders with
             // the parameter value, executing an ad-hoc query on the server
             $sql = $this->emulate_bound_params($sql, $params);
-            $sanitised_parameters = array();
-        } else {
-            // Params array includes the hex and numstr data types, which we need to convert
-            // to a format that sqlsrv understands
-            $sanitised_parameters = $this->sanitise_bound_params($params);
+            $params = array();
         }
 
         $this->query_start($sql, $params, $sql_query_type);
         if (!$scrollable) { // Only supporting next row
-            $result = sqlsrv_query($this->sqlsrv, $sql, $sanitised_parameters);
+            $result = sqlsrv_query($this->sqlsrv, $sql, $params);
         } else { // Supporting absolute/relative rows
-            $result = sqlsrv_query($this->sqlsrv, $sql, $sanitised_parameters, array('Scrollable' => SQLSRV_CURSOR_STATIC));
+            $result = sqlsrv_query($this->sqlsrv, $sql, $params, array('Scrollable' => SQLSRV_CURSOR_STATIC));
         }
 
         if ($result === false) {
@@ -650,23 +651,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
     protected function normalise_value($column, $value) {
         $this->detect_objects($value);
 
-        if (is_bool($value)) {                               // Always, convert boolean to int
+        if (is_bool($value)) { // Always, convert boolean to int
             $value = (int)$value;
-        }                                                    // And continue processing because text columns with numeric info need special handling below
-
-        if ($column->meta_type == 'B')
-        { // BLOBs need to be properly "packed", but can be inserted directly if so.
-            if (!is_null($value)) {               // If value not null, unpack it to unquoted hexadecimal byte-string format
-                $value = unpack('H*hex', $value); // we leave it as array, so emulate_bound_params() can detect it
-            }                                                // easily and "bind" the param ok.
-
-        } else if ($column->meta_type == 'X') {              // sqlsrv doesn't cast from int to text, so if text column
-            if (is_numeric($value)) { // and is numeric value then cast to string
-                $value = array('numstr' => (string)$value);  // and put into array, so emulate_bound_params() will know how
-            }                                                // to "bind" the param ok, avoiding reverse conversion to number
+        } else if (!is_null($value) && (is_float($value) || $column->meta_type === 'C' || $column->meta_type === 'X')) {
+            $value = strval($value);
+        } else if ($column->meta_type === 'B') {
+            $value = [$value, SQLSRV_PARAM_IN, SQLSRV_PHPTYPE_STREAM(SQLSRV_ENC_BINARY), SQLSRV_SQLTYPE_VARBINARY('max')];
         } else if ($value === '') {
-
-            if ($column->meta_type == 'I' or $column->meta_type == 'F' or $column->meta_type == 'N') {
+            if ($column->meta_type === 'I' or $column->meta_type === 'F' or $column->meta_type === 'N') {
                 $value = 0; // prevent '' problems in numeric fields
             }
         }
@@ -794,6 +786,8 @@ class sqlsrv_native_moodle_database extends moodle_database {
                 $return .= '0x'.$param['hex'];
             } else if (is_array($param) && isset($param['numstr'])) { // detect numerical strings that *must not*
                 $return .= "N'{$param['numstr']}'";                   // be converted back to number params, but bound as strings
+            } else if (is_array($param) && isset($param['int'])) { // Force integers for OFFSET or LIMIT statements
+                $return .= intval($param['num']);
             } else if (is_null($param)) {
                 $return .= 'NULL';
 
@@ -810,25 +804,6 @@ class sqlsrv_native_moodle_database extends moodle_database {
             $return .= array_pop($parts);
         }
         return $return;
-    }
-
-    /**
-     * Sanitises the parameters array so that they can be passed into sqlsrv_query
-     * @param array $params Moodle parameters
-     * @return array Parameters for sqlsrv
-     */
-    protected function sanitise_bound_params(array $params = array()) {
-        return array_map(function($param) {
-
-            if(is_array($param) && isset($param['hex']))
-                return '0x' . $param['hex'];
-
-            if(is_array($param) && isset($param['numstr']))
-                return strval($param['numstr']);
-
-            return $param;
-
-        }, $params);
     }
 
     /**
@@ -890,8 +865,18 @@ class sqlsrv_native_moodle_database extends moodle_database {
      */
     public function get_recordset_sql($sql, array $params = null, $limitfrom = 0, $limitnum = 0) {
 
+        list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
         list($limitfrom, $limitnum) = $this->normalise_limit_from_num($limitfrom, $limitnum);
         $needscrollable = (bool)$limitfrom; // To determine if we'll need to perform scroll to $limitfrom.
+
+        // Because there's no column list, parameters here aren't normalised by self::normalise_value($column, $value)
+        // When querying against a string column, sqlsrv won't coerce a numeric value into a string and just return an error
+        // if all non-null params are treated as strings then sqlsrv coerces types as needed
+        if(!is_null($params)) {
+            foreach($params as $i => $param) {
+                $params[$i] = is_null($param) ? $param : strval($param);
+            }
+        }
 
         if ($limitfrom or $limitnum) {
             if (!$this->supportsoffsetfetch) {
@@ -901,9 +886,11 @@ class sqlsrv_native_moodle_database extends moodle_database {
                         $fetch = PHP_INT_MAX;
                     }
                     $sql = preg_replace('/^([\s(])*SELECT([\s]+(DISTINCT|ALL))?(?!\s*TOP\s*\()/i',
-                        "\\1SELECT\\2 TOP $fetch", $sql);
+                        "\\1SELECT\\2 TOP ?", $sql);
+                    array_push($params, $fetch);
                 }
             } else {
+
                 $needscrollable = false; // Using supported fetch/offset, no need to scroll anymore.
                 $sql = (substr($sql, -1) === ';') ? substr($sql, 0, -1) : $sql;
                 // We need ORDER BY to use FETCH/OFFSET.
@@ -912,11 +899,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
                     $sql .= " ORDER BY 1";
                 }
 
-                $sql .= " OFFSET ".$limitfrom." ROWS ";
+                $sql .= " OFFSET ? ROWS ";
+                array_push($params, $limitfrom);
 
                 if ($limitnum > 0) {
-                    $sql .= " FETCH NEXT ".$limitnum." ROWS ONLY";
+                    $sql .= " FETCH NEXT ? ROWS ONLY";
+                    array_push($params, $limitnum);
                 }
+
             }
         }
 
@@ -1378,10 +1368,13 @@ class sqlsrv_native_moodle_database extends moodle_database {
         return $this->collation;
     }
 
-    public function sql_equal($fieldname, $param, $casesensitive = true, $accentsensitive = true, $notequal = false) {
-        $equalop = $notequal ? '<>' : '=';
-        $collation = $this->get_collation();
-
+    /**
+     * Modifies a SQL server collation to be case / accent (in)sensitive
+     * @param string $collation
+     * @param bool $casesensitive
+     * @param bool $accentsensitive
+     */
+    private function modify_collation($collation, $casesensitive, $accentsensitive) {
         if ($casesensitive) {
             $collation = str_replace('_CI', '_CS', $collation);
         } else {
@@ -1392,6 +1385,23 @@ class sqlsrv_native_moodle_database extends moodle_database {
         } else {
             $collation = str_replace('_AS', '_AI', $collation);
         }
+
+        if(substr($collation, 0, 4) === 'SQL_' && $casesensitive && !$accentsensitive) {
+            /*
+             * There are no SQL_ collations that are case sensitive and accent insensitive, but if we remove
+             * the SQL_ prefix and the CPnn_ part, we get a codepage that does exist
+             */
+            $collation = preg_replace('/(SQL_|CP\d+_)/i', '', $collation);
+        }
+
+        return $collation;
+    }
+
+    public function sql_equal($fieldname, $param, $casesensitive = true, $accentsensitive = true, $notequal = false) {
+        $equalop = $notequal ? '<>' : '=';
+        $collation = $this->get_collation();
+
+        $collation = $this->modify_collation($collation, $casesensitive, $accentsensitive);
 
         return "$fieldname COLLATE $collation $equalop $param";
     }
@@ -1415,16 +1425,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $collation = $this->get_collation();
         $LIKE = $notlike ? 'NOT LIKE' : 'LIKE';
 
-        if ($casesensitive) {
-            $collation = str_replace('_CI', '_CS', $collation);
-        } else {
-            $collation = str_replace('_CS', '_CI', $collation);
-        }
-        if ($accentsensitive) {
-            $collation = str_replace('_AI', '_AS', $collation);
-        } else {
-            $collation = str_replace('_AS', '_AI', $collation);
-        }
+        $collation = $this->modify_collation($collation, $casesensitive, $accentsensitive);
 
         return "$fieldname COLLATE $collation $LIKE $param ESCAPE '$escapechar'";
     }
