@@ -25,5 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 // Settings page.
+$ADMIN->add('h5p', new admin_externalpage('h5poverview', get_string('h5poverview', 'core_h5p'),
+    new moodle_url('/h5p/overview.php'), ['moodle/site:config']));
 $ADMIN->add('h5p', new admin_externalpage('h5psettings', get_string('h5pmanage', 'core_h5p'),
     new moodle_url('/h5p/libraries.php'), ['moodle/site:config', 'moodle/h5p:updatelibraries']));
