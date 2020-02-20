@@ -160,6 +160,7 @@ before_script:
           sed -i \
             -e "s%= 'pgsql'%= 'sqlsrv'%" \
             -e "s%= 'localhost'%= '127.0.0.1'%" \
+            -e "s%= 'utf8mb4_unicode_ci'%= 'SQL_Latin1_General_CP1_CI_AS'%" \
             config.php ;
             
           docker exec mssql /opt/mssql-tools/bin/sqlcmd -U sa -P Sqlsrv2020 -Q "CREATE DATABASE travis_ci_test;"
