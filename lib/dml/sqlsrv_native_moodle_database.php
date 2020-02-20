@@ -865,7 +865,6 @@ class sqlsrv_native_moodle_database extends moodle_database {
      */
     public function get_recordset_sql($sql, array $params = null, $limitfrom = 0, $limitnum = 0) {
 
-        list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
         list($limitfrom, $limitnum) = $this->normalise_limit_from_num($limitfrom, $limitnum);
         $needscrollable = (bool)$limitfrom; // To determine if we'll need to perform scroll to $limitfrom.
 
@@ -874,20 +873,32 @@ class sqlsrv_native_moodle_database extends moodle_database {
         // if all non-null params are treated as strings then sqlsrv coerces types as needed
         if(!is_null($params)) {
             foreach($params as $i => $param) {
+                $this->detect_objects($param);
                 $params[$i] = is_null($param) ? $param : strval($param);
             }
         }
 
         if ($limitfrom or $limitnum) {
+
+            if(is_null($params))
+                $params = array();
+
+            // It's not ideal that the logic to detect which placeholder is being used is duplicated,
+            // but calling $this->fix_sql_params(..) also fixes table names, which breaks
+            // $this->add_no_lock_to_temp_tables
+            $placeholderType = $this->detect_placeholder_type($sql, $params);
+
             if (!$this->supportsoffsetfetch) {
                 if ($limitnum >= 1) { // Only apply TOP clause if we have any limitnum (limitfrom offset is handled later).
                     $fetch = $limitfrom + $limitnum;
                     if (PHP_INT_MAX - $limitnum < $limitfrom) { // Check PHP_INT_MAX overflow.
                         $fetch = PHP_INT_MAX;
                     }
+
+                    $limitPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $fetch, $params, true);
+
                     $sql = preg_replace('/^([\s(])*SELECT([\s]+(DISTINCT|ALL))?(?!\s*TOP\s*\()/i',
-                        "\\1SELECT\\2 TOP ?", $sql);
-                    array_push($params, $fetch);
+                        "\\1SELECT\\2 TOP $limitPlaceholder", $sql);
                 }
             } else {
 
@@ -899,12 +910,12 @@ class sqlsrv_native_moodle_database extends moodle_database {
                     $sql .= " ORDER BY 1";
                 }
 
-                $sql .= " OFFSET ? ROWS ";
-                array_push($params, $limitfrom);
+                $offsetPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitfrom, $params);
+                $sql .= " OFFSET $offsetPlaceholder ROWS ";
 
                 if ($limitnum > 0) {
-                    $sql .= " FETCH NEXT ? ROWS ONLY";
-                    array_push($params, $limitnum);
+                    $fetchPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitnum, $params);
+                    $sql .= " FETCH NEXT $fetchPlaceholder ROWS ONLY";
                 }
 
             }
@@ -919,6 +930,76 @@ class sqlsrv_native_moodle_database extends moodle_database {
             sqlsrv_fetch($result, SQLSRV_SCROLL_ABSOLUTE, $limitfrom - 1);
         }
         return $this->create_recordset($result);
+    }
+
+    /**
+     * Detects the placeholder type from a given query and optional array of parameters
+     * @param string $sql The input query
+     * @param array $params The query parameters
+     * @return int Which placeholder type is being used
+     * @throws coding_exception
+     */
+    protected function detect_placeholder_type($sql, array $params = null) {
+        if(is_null($params) || empty($params))
+            return SQL_PARAMS_QM;
+
+        if (is_array($params) && !is_numeric(array_keys($params)[0]))
+            return SQL_PARAMS_NAMED;
+
+        if(strpos($sql, '?') > 0)
+            return SQL_PARAMS_QM;
+
+        $named = preg_match_all('/(?<!:):[a-z][a-z0-9_]*/', $sql, $named_matches);
+        $dollar = preg_match_all('/\$[1-9][0-9]*/', $sql, $dollar_matches);
+
+        if($named > 0 && $dollar == 0) return SQL_PARAMS_NAMED;
+        if($dollar > 0 && $named == 0) return SQL_PARAMS_DOLLAR;
+
+        throw new coding_exception('Multiple parameter types are being used');
+
+    }
+
+    /**
+     * Given a parameter value and the type of placeholder to use in a query, returns a new placeholder value
+     * that can be added into the query and sets up the parameter's value in the parameters array
+     * @param int $placeholderType Which SQL_PARAM_* type to generate
+     * @param mixed $value The parameter's value
+     * @param array $params The list of parameters to append the value to
+     * @param bool $prepend For SQL_PARAM_QM, is this new parameter going to the start or the end of the query?
+     * @return string The placeholder value
+     * @throws coding_exception
+     */
+    protected function get_placeholder_and_add_parameter($placeholderType, $value, &$params, $prepend = false) {
+
+        switch($placeholderType) {
+
+            case SQL_PARAMS_QM:
+                // question mark parameters are positional, so we can only support adding them to the start or end of
+                // a query
+                if($prepend)
+                    array_unshift($params, $value);
+                else array_push($params, $value);
+                return '?';
+
+            case SQL_PARAMS_DOLLAR:
+                $index = count($params);
+                array_push($value);
+                return '$' . $index;
+
+            case SQL_PARAMS_NAMED:
+                $i = 0;
+                do {
+                    // parameter name just needs to not already be in the list of parameters
+                    $name = "sqlsrv$i";
+                    $i++;
+                } while (array_key_exists($name, $params));
+                $params[$name] = $value;
+                return ":$name";
+
+            default:
+                throw new \coding_exception('unknown parameter placeholder type', $placeholderType);
+        }
+
     }
 
     /**
