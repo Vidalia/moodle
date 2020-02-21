@@ -44,11 +44,6 @@ class sqlsrv_native_moodle_database extends moodle_database {
     protected $last_error_reporting; // To handle SQL*Server-Native driver default verbosity
     protected $temptables; // Control existing temptables (sqlsrv_moodle_temptables object)
     protected $collation;  // current DB collation cache
-    /**
-     * Does the used db version support ANSI way of limiting (2012 and higher)
-     * @var bool
-     */
-    protected $supportsoffsetfetch;
 
     /** @var array list of open recordsets */
     protected $recordsets = array();
@@ -279,10 +274,6 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         $this->free_result($result);
 
-        $serverinfo = $this->get_server_info();
-        // Fetch/offset is supported staring from SQL Server 2012.
-        $this->supportsoffsetfetch = $serverinfo['version'] > '11';
-
         // We can enable logging now.
         $this->query_log_allow();
 
@@ -347,25 +338,19 @@ class sqlsrv_native_moodle_database extends moodle_database {
     }
 
     /**
-     * Override: Converts short table name {tablename} to real table name
+     * Adds the prefix to the table name
      * supporting temp tables (#) if detected
      *
-     * @param string sql
-     * @return string sql
+     * @param string $tablename The table name
+     * @return string The prefixed table name
      */
-    protected function fix_table_names($sql) {
-        if (preg_match_all('/\{([a-z][a-z0-9_]*)\}/i', $sql, $matches)) {
-            foreach ($matches[0] as $key => $match) {
-                $name = $matches[1][$key];
+    protected function fix_table_name($tablename) {
 
-                if ($this->temptables->is_temptable($name)) {
-                    $sql = str_replace($match, $this->temptables->get_correct_name($name), $sql);
-                } else {
-                    $sql = str_replace($match, $this->prefix.$name, $sql);
-                }
-            }
+        if($this->temptables->is_temptable($tablename)) {
+            return $this->temptables->get_correct_name($tablename);
+        } else {
+            return parent::fix_table_name($tablename);
         }
-        return $sql;
     }
 
     /**
@@ -457,11 +442,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $this->tables = array ();
         $prefix = str_replace('_', '\\_', $this->prefix);
         $sql = "SELECT table_name
-                  FROM INFORMATION_SCHEMA.TABLES
-                 WHERE table_name LIKE '$prefix%' ESCAPE '\\' AND table_type = 'BASE TABLE'";
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE table_name LIKE ? ESCAPE '\\'
+                AND table_type = 'BASE TABLE'";
+
+        $params = [ $prefix . '%' ];
 
         $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
+        $result = sqlsrv_query($this->sqlsrv, $sql, $params);
         $this->query_end($result);
 
         if ($result) {
@@ -499,11 +487,11 @@ class sqlsrv_native_moodle_database extends moodle_database {
                   JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                   JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
                   JOIN sys.tables t ON i.object_id = t.object_id
-                 WHERE t.name = '$tablename' AND i.is_primary_key = 0
+                 WHERE t.name = ? AND i.is_primary_key = 0
               ORDER BY i.name, i.index_id, ic.index_column_id";
 
         $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
+        $result = sqlsrv_query($this->sqlsrv, $sql, [ $tablename ]);
         $this->query_end($result);
 
         if ($result) {
@@ -550,6 +538,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
     protected function fetch_columns(string $table): array {
         $structure = array();
 
+        $tablename = $this->fix_table_name($table);
+        $params = array();
+
         if (!$this->temptables->is_temptable($table)) { // normal table, get metadata from own schema
             $sql = "SELECT column_name AS name,
                            data_type AS type,
@@ -560,8 +551,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
                            columnproperty(object_id(quotename(table_schema) + '.' + quotename(table_name)), column_name, 'IsIdentity') AS auto_increment,
                            column_default AS default_value
                       FROM INFORMATION_SCHEMA.COLUMNS
-                     WHERE table_name = '{".$table."}'
+                     WHERE table_name = ?
                   ORDER BY ordinal_position";
+            $params[] = $tablename;
         } else { // temp table, get metadata from tempdb schema
             $sql = "SELECT column_name AS name,
                            data_type AS type,
@@ -571,18 +563,15 @@ class sqlsrv_native_moodle_database extends moodle_database {
                            is_nullable AS is_nullable,
                            columnproperty(object_id(quotename(table_schema) + '.' + quotename(table_name)), column_name, 'IsIdentity') AS auto_increment,
                            column_default AS default_value
-                      FROM tempdb.INFORMATION_SCHEMA.COLUMNS ".
-                // check this statement
-                // JOIN tempdb..sysobjects ON name = table_name
-                // WHERE id = object_id('tempdb..{".$table."}')
-                "WHERE table_name LIKE '{".$table."}__________%'
-                  ORDER BY ordinal_position";
+                      FROM tempdb.INFORMATION_SCHEMA.COLUMNS
+                      WHERE LEFT(table_name, ?) = ?
+                      ORDER BY ordinal_position";
+            $params[] = strlen($tablename);
+            $params[] = $tablename;
         }
 
-        list($sql, $params, $type) = $this->fix_sql_params($sql, null);
-
         $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
+        $result = sqlsrv_query($this->sqlsrv, $sql, $params);
         $this->query_end($result);
 
         if (!$result) {
@@ -742,14 +731,12 @@ class sqlsrv_native_moodle_database extends moodle_database {
      */
     public function change_database_structure($sql, $tablenames = null) {
         $this->get_manager(); // Includes DDL exceptions classes ;-)
-        $sqls = (array)$sql;
 
         try {
-            foreach ($sqls as $sql) {
-                $this->query_start($sql, null, SQL_QUERY_STRUCTURE);
-                $result = sqlsrv_query($this->sqlsrv, $sql);
-                $this->query_end($result);
-            }
+            $sql = is_array($sql) ? implode('; ', $sql) : $sql;
+            $this->query_start($sql, null, SQL_QUERY_STRUCTURE);
+            $result = sqlsrv_query($this->sqlsrv, $sql);
+            $this->query_end($result);
         } catch (ddl_change_structure_exception $e) {
             $this->reset_caches($tablenames);
             throw $e;
@@ -883,42 +870,27 @@ class sqlsrv_native_moodle_database extends moodle_database {
             if(is_null($params))
                 $params = array();
 
-            // It's not ideal that the logic to detect which placeholder is being used is duplicated,
+            // It's not ideal that the logic to detect \which placeholder is being used is duplicated,
             // but calling $this->fix_sql_params(..) also fixes table names, which breaks
             // $this->add_no_lock_to_temp_tables
             $placeholderType = $this->detect_placeholder_type($sql, $params);
 
-            if (!$this->supportsoffsetfetch) {
-                if ($limitnum >= 1) { // Only apply TOP clause if we have any limitnum (limitfrom offset is handled later).
-                    $fetch = $limitfrom + $limitnum;
-                    if (PHP_INT_MAX - $limitnum < $limitfrom) { // Check PHP_INT_MAX overflow.
-                        $fetch = PHP_INT_MAX;
-                    }
-
-                    $limitPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $fetch, $params, true);
-
-                    $sql = preg_replace('/^([\s(])*SELECT([\s]+(DISTINCT|ALL))?(?!\s*TOP\s*\()/i',
-                        "\\1SELECT\\2 TOP $limitPlaceholder", $sql);
-                }
-            } else {
-
-                $needscrollable = false; // Using supported fetch/offset, no need to scroll anymore.
-                $sql = (substr($sql, -1) === ';') ? substr($sql, 0, -1) : $sql;
-                // We need ORDER BY to use FETCH/OFFSET.
-                // Ordering by first column shouldn't break anything if there was no order in the first place.
-                if (!self::has_query_order_by($sql)) {
-                    $sql .= " ORDER BY 1";
-                }
-
-                $offsetPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitfrom, $params);
-                $sql .= " OFFSET $offsetPlaceholder ROWS ";
-
-                if ($limitnum > 0) {
-                    $fetchPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitnum, $params);
-                    $sql .= " FETCH NEXT $fetchPlaceholder ROWS ONLY";
-                }
-
+            $needscrollable = false; // Using supported fetch/offset, no need to scroll anymore.
+            $sql = (substr($sql, -1) === ';') ? substr($sql, 0, -1) : $sql;
+            // We need ORDER BY to use FETCH/OFFSET.
+            // Ordering by first column shouldn't break anything if there was no order in the first place.
+            if (!self::has_query_order_by($sql)) {
+                $sql .= " ORDER BY 1";
             }
+
+            $offsetPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitfrom, $params);
+            $sql .= " OFFSET $offsetPlaceholder ROWS ";
+
+            if ($limitnum > 0) {
+                $fetchPlaceholder = $this->get_placeholder_and_add_parameter($placeholderType, $limitnum, $params);
+                $sql .= " FETCH NEXT $fetchPlaceholder ROWS ONLY";
+            }
+
         }
 
         // Add WITH (NOLOCK) to any temp tables.
@@ -1617,14 +1589,14 @@ class sqlsrv_native_moodle_database extends moodle_database {
         // $sql = "sp_getapplock '$fullname', 'Exclusive', 'Session',  $timeoutmilli";
         $sql = "BEGIN
                     DECLARE @result INT
-                    EXECUTE @result = sp_getapplock @Resource='$fullname',
-                                                    @LockMode='Exclusive',
-                                                    @LockOwner='Session',
-                                                    @LockTimeout='$timeoutmilli'
+                    EXECUTE @result = sp_getapplock @Resource= ?,
+                                                    @LockMode= ?,
+                                                    @LockOwner= ?,
+                                                    @LockTimeout= ?
                     SELECT @result
                 END";
         $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
+        $result = sqlsrv_query($this->sqlsrv, $sql, [$fullname, 'Exclusive', 'Session', $timeoutmilli]);
         $this->query_end($result);
 
         if ($result) {
@@ -1648,9 +1620,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
         parent::release_session_lock($rowid);
 
         $fullname = $this->dbname.'-'.$this->prefix.'-session-'.$rowid;
-        $sql = "sp_releaseapplock '$fullname', 'Session'";
+        $sql = "sp_releaseapplock ?, ?";
         $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
+        $result = sqlsrv_query($this->sqlsrv, $sql, [ $fullname, 'Session' ]);
         $this->query_end($result);
         $this->free_result($result);
     }
