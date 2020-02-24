@@ -981,13 +981,13 @@ class sqlsrv_native_moodle_database extends moodle_database {
      * @return string The SQL, with WITH (NOLOCK) added to all temp tables
      */
     protected function add_no_lock_to_temp_tables($sql) {
-        return preg_replace_callback('/(\{([a-z][a-z0-9_]*)\})(\s+(\w+))?/', function($matches) {
+        return preg_replace_callback('/([\{#]([a-z][a-z0-9_]*)\}?)(\s+(\w+))?/', function($matches) {
             $table = $matches[1]; // With the braces, so we can put it back in the query.
             $name = $matches[2]; // Without the braces, so we can check if it's a temptable.
             $tail = isset($matches[3]) ? $matches[3] : ''; // Catch the next word afterwards so that we can check if it's an alias.
             $replacement = $matches[0]; // The table and the word following it, so we can replace it back if no changes are needed.
 
-            if ($this->temptables && $this->temptables->is_temptable($name)) {
+            if (substr($name, 0, 1) === '#' || ($this->temptables && $this->temptables->is_temptable($name))) {
                 if (!empty($tail)) {
                     if (in_array(strtolower(trim($tail)), $this->reservewords)) {
                         // If the table is followed by a reserve word, it's not an alias so put the WITH (NOLOCK) in between.

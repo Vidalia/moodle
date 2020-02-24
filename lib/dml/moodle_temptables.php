@@ -136,7 +136,7 @@ class moodle_temptables {
         // So we error_log that and, at the same time, drop all the pending temptables
         if ($temptables = $this->get_temptables()) {
             error_log('Potential coding error - existing temptables found when disposing database. Must be dropped!');
-            foreach ($temptables as $temptable) {
+            foreach ($temptables as $originaltable => $temptable) {
                  $this->mdb->get_manager()->drop_table(new xmldb_table($temptable));
             }
         }

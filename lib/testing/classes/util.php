@@ -983,7 +983,7 @@ abstract class testing_util {
             echo "Dropping tables:\n";
         }
         $dotsonline = 0;
-        foreach ($tables as $tablename) {
+        foreach ($tables as $originaltable => $tablename) {
             $table = new xmldb_table($tablename);
             $DB->get_manager()->drop_table($table);
 
