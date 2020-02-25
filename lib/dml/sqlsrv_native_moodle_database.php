@@ -44,6 +44,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
     protected $last_error_reporting; // To handle SQL*Server-Native driver default verbosity
     protected $temptables; // Control existing temptables (sqlsrv_moodle_temptables object)
     protected $collation;  // current DB collation cache
+    protected $emulateparams = false; // If true, query parameters are interpolated directly into the query text
 
     /** @var array list of open recordsets */
     protected $recordsets = array();
@@ -155,9 +156,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $sql = "SELECT is_read_committed_snapshot_on
                   FROM sys.databases
                  WHERE name = '{$this->dbname}'";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
+
+        $result = $this->do_query($sql, null, SQL_QUERY_AUX, false);
+
         if ($result) {
             if ($row = sqlsrv_fetch_array($result)) {
                 $correctrcsmode = (bool)reset($row);
@@ -234,51 +235,36 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         // Allow quoted identifiers
         $sql = "SET QUOTED_IDENTIFIER ON";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
-
-        $this->free_result($result);
+        $this->do_query($sql, null, SQL_QUERY_AUX);
 
         // Force ANSI nulls so the NULL check was done by IS NULL and NOT IS NULL
         // instead of equal(=) and distinct(<>) symbols
         $sql = "SET ANSI_NULLS ON";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
-
-        $this->free_result($result);
+        $this->do_query($sql, null, SQL_QUERY_AUX);
 
         // Force ANSI warnings so arithmetic/string overflows will be
         // returning error instead of transparently truncating data
         $sql = "SET ANSI_WARNINGS ON";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
+        $this->do_query($sql, null, SQL_QUERY_AUX);
 
         // Concatenating null with anything MUST return NULL
         $sql = "SET CONCAT_NULL_YIELDS_NULL  ON";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
-
-        $this->free_result($result);
+        $this->do_query($sql, null, SQL_QUERY_AUX);
 
         // Set transactions isolation level to READ_COMMITTED
         // prevents dirty reads when using transactions +
         // is the default isolation level of sqlsrv
         $sql = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED";
-        $this->query_start($sql, NULL, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
-
-        $this->free_result($result);
+        $this->do_query($sql, null, SQL_QUERY_AUX);
 
         // We can enable logging now.
         $this->query_log_allow();
 
         // Connection established and configured, going to instantiate the temptables controller
         $this->temptables = new sqlsrv_native_moodle_temptables($this);
+
+        if(isset($this->dboptions['dbemulateparameters']))
+            $this->emulateparams = boolval($this->dboptions['dbemulateparameters']);
 
         return true;
     }
@@ -395,14 +381,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
     private function do_query($sql, $params, $sql_query_type, $free_result = true, $scrollable = false) {
         list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
 
-        $emulate_params = false;
-
-        if(isset($this->dboptions['emulateparameters']))
-            $emulate_params = boolval($this->dboptions['emulateparameters']);
-
         // PHPUnit tests expect that we can support 10,000 parameters, so if we go over
         // the max parameter count for sql server fall back to emulated parameter mode
-        if($emulate_params || sizeof($params) > self::MAX_PARAMETER_COUNT) {
+        if($this->emulateparams || sizeof($params) > self::MAX_PARAMETER_COUNT) {
             // Emulating bound parameters will just replace the query ? placeholders with
             // the parameter value, executing an ad-hoc query on the server
             $sql = $this->emulate_bound_params($sql, $params);
@@ -411,6 +392,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         $options = array();
 
+        // Scrollable result sets need a reversible cursor
         if($scrollable || strpos($sql, '#') !== false)
             $options['Scrollable'] = SQLSRV_CURSOR_STATIC;
 
@@ -449,9 +431,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         $params = [ $prefix . '%' ];
 
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql, $params);
-        $this->query_end($result);
+        $result = $this->do_query($sql, $params, SQL_QUERY_AUX, false);
 
         if ($result) {
             while ($row = sqlsrv_fetch_array($result)) {
@@ -491,9 +471,11 @@ class sqlsrv_native_moodle_database extends moodle_database {
                  WHERE t.name = ? AND i.is_primary_key = 0
               ORDER BY i.name, i.index_id, ic.index_column_id";
 
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql, [ $tablename ]);
-        $this->query_end($result);
+        $params = [
+            $tablename
+        ];
+
+        $result = $this->do_query($sql, $params, SQL_QUERY_AUX, false);
 
         if ($result) {
             $lastindex = '';
@@ -571,9 +553,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
             $params[] = $tablename;
         }
 
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql, $params);
-        $this->query_end($result);
+        $result = $this->do_query($sql, $params, SQL_QUERY_AUX, false);
 
         if (!$result) {
             return array ();
@@ -732,12 +712,12 @@ class sqlsrv_native_moodle_database extends moodle_database {
      */
     public function change_database_structure($sql, $tablenames = null) {
         $this->get_manager(); // Includes DDL exceptions classes ;-)
+        $sqls = (array)$sql;
 
         try {
-            $sql = is_array($sql) ? implode('; ', $sql) : $sql;
-            $this->query_start($sql, null, SQL_QUERY_STRUCTURE);
-            $result = sqlsrv_query($this->sqlsrv, $sql);
-            $this->query_end($result);
+            foreach ($sqls as $sql) {
+                $this->do_query($sql, null, SQL_QUERY_STRUCTURE);
+            }
         } catch (ddl_change_structure_exception $e) {
             $this->reset_caches($tablenames);
             throw $e;
@@ -862,7 +842,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
         if(!is_null($params)) {
             foreach($params as $i => $param) {
                 $this->detect_objects($param);
-                $params[$i] = is_null($param) ? $param : strval($param);
+                $params[$i] = is_null($param) || is_array($param) ? $param : strval($param);
             }
         }
 
@@ -895,10 +875,6 @@ class sqlsrv_native_moodle_database extends moodle_database {
         }
 
         $result = $this->do_query($sql, $params, SQL_QUERY_SELECT, false, $needscrollable);
-
-        if ($needscrollable) { // Skip $limitfrom records.
-            sqlsrv_fetch($result, SQLSRV_SCROLL_ABSOLUTE, $limitfrom - 1);
-        }
 
         return $this->create_recordset($result);
     }
@@ -1378,9 +1354,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
         $this->collation = 'Latin1_General_CI_AI';
 
         $sql = "SELECT CAST(DATABASEPROPERTYEX('$this->dbname', 'Collation') AS varchar(255)) AS SQLCollation";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
+        $result = $this->do_query($sql, null, SQL_QUERY_AUX, false);
 
         if ($result) {
             if ($rawcolumn = sqlsrv_fetch_array($result, SQLSRV_FETCH_ASSOC)) {
@@ -1566,9 +1540,10 @@ class sqlsrv_native_moodle_database extends moodle_database {
                                                     @LockTimeout= ?
                     SELECT @result
                 END";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql, [$fullname, 'Exclusive', 'Session', $timeoutmilli]);
-        $this->query_end($result);
+        
+        $params = [$fullname, 'Exclusive', 'Session', $timeoutmilli];
+
+        $result = $this->do_query($sql, $params, SQL_QUERY_AUX, false);
 
         if ($result) {
             $row = sqlsrv_fetch_array($result);
@@ -1592,10 +1567,9 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         $fullname = $this->dbname.'-'.$this->prefix.'-session-'.$rowid;
         $sql = "sp_releaseapplock ?, ?";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql, [ $fullname, 'Session' ]);
-        $this->query_end($result);
-        $this->free_result($result);
+        $params = [ $fullname, 'Session' ];
+
+        $this->do_query($sql, $params, SQL_QUERY_AUX);
     }
 
     /**
@@ -1646,9 +1620,8 @@ class sqlsrv_native_moodle_database extends moodle_database {
         global $CFG;
 
         $sql = "SELECT FULLTEXTSERVICEPROPERTY('IsFullTextInstalled')";
-        $this->query_start($sql, null, SQL_QUERY_AUX);
-        $result = sqlsrv_query($this->sqlsrv, $sql);
-        $this->query_end($result);
+
+        $result = $this->do_query($sql, null, SQL_QUERY_AUX, false);
         if ($result) {
             if ($row = sqlsrv_fetch_array($result)) {
                 $property = (bool)reset($row);
