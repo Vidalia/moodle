@@ -379,11 +379,16 @@ class sqlsrv_native_moodle_database extends moodle_database {
      * @return resource|bool result
      */
     private function do_query($sql, $params, $sql_query_type, $free_result = true, $scrollable = false) {
-        list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
+
+        // Structure queries never use parameters. fix_sql_params can break if part of the DB structure
+        // includes a '?' as part of the schema definition (e.g. column default value) as Moodle
+        // incorrectly assumes it's meant to be a placeholder
+        if($sql_query_type !== SQL_QUERY_STRUCTURE)
+            list($sql, $params, $type) = $this->fix_sql_params($sql, $params);
 
         // PHPUnit tests expect that we can support 10,000 parameters, so if we go over
         // the max parameter count for sql server fall back to emulated parameter mode
-        if($this->emulateparams || sizeof($params) > self::MAX_PARAMETER_COUNT) {
+        if($this->emulateparams || (is_countable($params) && count($params) > self::MAX_PARAMETER_COUNT)) {
             // Emulating bound parameters will just replace the query ? placeholders with
             // the parameter value, executing an ad-hoc query on the server
             $sql = $this->emulate_bound_params($sql, $params);
