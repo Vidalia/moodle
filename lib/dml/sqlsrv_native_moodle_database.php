@@ -388,7 +388,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         // PHPUnit tests expect that we can support 10,000 parameters, so if we go over
         // the max parameter count for sql server fall back to emulated parameter mode
-        if($this->emulateparams || (is_countable($params) && count($params) > self::MAX_PARAMETER_COUNT)) {
+        if($this->emulateparams || (is_array($params) && count($params) > self::MAX_PARAMETER_COUNT)) {
             // Emulating bound parameters will just replace the query ? placeholders with
             // the parameter value, executing an ad-hoc query on the server
             $sql = $this->emulate_bound_params($sql, $params);
