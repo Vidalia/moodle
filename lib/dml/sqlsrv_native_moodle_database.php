@@ -628,7 +628,7 @@ class sqlsrv_native_moodle_database extends moodle_database {
 
         if (is_bool($value)) { // Always, convert boolean to int
             $value = (int)$value;
-        } else if (!is_null($value) && (is_float($value) || $column->meta_type === 'C' || $column->meta_type === 'X')) {
+        } else if ($column->meta_type === 'X' && is_numeric($value)) {
             $value = strval($value);
         } else if ($column->meta_type === 'B') {
             $value = [$value, SQLSRV_PARAM_IN, SQLSRV_PHPTYPE_STREAM(SQLSRV_ENC_BINARY), SQLSRV_SQLTYPE_VARBINARY('max')];
